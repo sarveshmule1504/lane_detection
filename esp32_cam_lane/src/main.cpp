@@ -34,11 +34,12 @@
 #include "esp_http_server.h"
 #include "img_converters.h"
 #include <WiFi.h>
+#include <ESPmDNS.h>
 
 // ======================== USER CONFIG ========================
 // *** CHANGE THESE to your WiFi credentials! ***
-const char* WIFI_SSID     = "Agastyas PG_201";
-const char* WIFI_PASSWORD = "Agastyas.pg@123";
+const char* WIFI_SSID     = "Car";
+const char* WIFI_PASSWORD = "1234567890";
 
 // If WiFi fails, ESP32-CAM creates its own Access Point:
 const char* AP_SSID     = "ESP32-CAM-Lane";
@@ -148,27 +149,26 @@ bool initCamera() {
 // ======================== WIFI INIT ========================
 void initWiFi() {
     WiFi.mode(WIFI_STA);
+    
+    // Connect using DHCP (let the router assign the IP)
+    // This allows it to work on ANY mobile hotspot subnet!
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.printf("[WiFi] Connecting to '%s'", WIFI_SSID);
 
-    int tries = 0;
-    while (WiFi.status() != WL_CONNECTED && tries < 20) {
+    // Loop infinitely until connected
+    while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
-        tries++;
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        WiFi.setSleep(false); // Disable WiFi power save to fix massive stream lag
-        Serial.printf("\n[WiFi] Connected!  IP: http://%s\n", WiFi.localIP().toString().c_str());
-        return;
+    Serial.printf("\n[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    
+    // Start mDNS (You will NEVER need to memorize the IP again!)
+    if (MDNS.begin("smartcar")) {
+        Serial.println("[mDNS] Started! You can now visit: http://smartcar.local");
+    } else {
+        Serial.println("[mDNS] Error starting mDNS.");
     }
-
-    // Fallback → create Access Point
-    Serial.printf("\n[WiFi] Failed! Creating AP: '%s' / '%s'\n", AP_SSID, AP_PASSWORD);
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
-    Serial.printf("[WiFi] AP IP: http://%s\n", WiFi.softAPIP().toString().c_str());
 }
 
 // ======================== DRAWING HELPERS ========================
@@ -421,7 +421,7 @@ static const char INDEX_HTML[] = R"rawliteral(
     <span class="fps"><span class="conn err" id="dot"></span><span id="fps">-- FPS</span></span>
 </div>
 <div class="wrap">
-    <div class="vid"><img id="stream" alt="Stream"></div>
+    <div class="vid"><img id="stream" alt="Stream" crossorigin="anonymous"></div>
     <div class="side">
         <div class="card">
             <h3>Steering Direction</h3>
@@ -453,9 +453,57 @@ static const char INDEX_HTML[] = R"rawliteral(
             <button class="btn bi" id="ib" onclick="inv()">Mode: Bright Lines &#x2600;</button>
             <button class="btn bf" id="fb" onclick="fl()">&#x1F4A1; Flash: OFF</button>
         </div>
+        <div class="card">
+            <h3>AI Vision (Groq)</h3>
+            <button class="btn" style="background:linear-gradient(135deg,#9b59b6,#8e44ad);color:#fff;" id="aiBtn" onclick="analyzeAI()">&#x1F9E0; Analyze Obstacle</button>
+            <div id="aiRes" style="margin-top:10px;font-size:0.85em;color:#fff;line-height:1.4;"></div>
+        </div>
     </div>
 </div>
 <script>
+    async function analyzeAI(){
+        var btn = document.getElementById('aiBtn');
+        var res = document.getElementById('aiRes');
+        btn.innerHTML = 'Processing...';
+        res.innerHTML = '';
+        try {
+            var img = document.getElementById('stream');
+            var canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || 400;
+            canvas.height = img.naturalHeight || 296;
+            var ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            var b64 = canvas.toDataURL('image/jpeg', 0.8).replace(/^data:image\/jpeg;base64,/, '');
+
+            var payload = {
+                model: "qwen/qwen3.8-27b",
+                messages: [
+                    {role: "system", content: "You are the AI brain of an autonomous car. Tell me exactly what obstacle is in front of me in one short sentence."},
+                    {role: "user", content: [
+                        {type: "text", text: "What is in front of the car?"},
+                        {type: "image_url", image_url: {url: "data:image/jpeg;base64," + b64}}
+                    ]}
+                ],
+                max_tokens: 100
+            };
+
+            var req = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer YOUR_GROQ_API_KEY_HERE',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            var data = await req.json();
+            if(data.error) res.innerHTML = "Error: " + data.error.message;
+            else res.innerHTML = "🤖 " + data.choices[0].message.content;
+        } catch(e) {
+            res.innerHTML = "Error: " + e;
+        }
+        btn.innerHTML = '&#x1F9E0; Analyze Obstacle';
+    }
+
     // Build stream URL on port 81
     var host = window.location.hostname;
     document.getElementById('stream').src = 'http://'+host+':81/stream';
@@ -590,7 +638,7 @@ static esp_err_t stream_handler(httpd_req_t* req) {
         uint8_t* jpgBuf = NULL;
         size_t   jpgLen = 0;
         bool ok = fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
-                          PIXFORMAT_GRAYSCALE, 40, &jpgBuf, &jpgLen);
+                          PIXFORMAT_GRAYSCALE, 80, &jpgBuf, &jpgLen);
         esp_camera_fb_return(fb);
 
         if (!ok || !jpgBuf) {
