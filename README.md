@@ -147,3 +147,5 @@ This project is provided for learning and experimentation. Please check the repo
 ## Summary
 
 This project teaches how a robot car can see the road, understand its environment, and react without much human input. It is a practical way to learn about computer vision, microcontrollers, motor control, and AI integration.
+<p align="center">
+<img width="900" height="800" alt="WhatsApp Image 2026-10-15 at 12 06 57 AM (1)" src="https://github.com/user-attachments/assets/da08c60b-9cd2-4850-b610-05bd65156215" />
